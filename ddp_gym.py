@@ -1,6 +1,8 @@
+import math
+
 import gym
-import env
-from autograd import grad, jacobian
+# import env
+from autograd import grad, jacobian, elementwise_grad
 import autograd.numpy as np
 
 class DDP:
@@ -15,8 +17,8 @@ class DDP:
         self.lf = final_cost
         self.lf_x = grad(self.lf)
         self.lf_xx = jacobian(self.lf_x)
-        self.l_x = grad(running_cost, 0)
-        self.l_u = grad(running_cost, 1)
+        self.l_x = elementwise_grad(running_cost, 0)
+        self.l_u = elementwise_grad(running_cost, 1)
         self.l_xx = jacobian(self.l_x, 0)
         self.l_uu = jacobian(self.l_u, 1)
         self.l_ux = jacobian(self.l_u, 0)
@@ -67,17 +69,27 @@ class DDP:
             x_seq_hat[t + 1] = self.f(x_seq_hat[t], u_seq_hat[t])
         return x_seq_hat, u_seq_hat
 
-env = gym.make('CartPoleContinuous-v0').env
+
+
+env = gym.make('LunarLanderContinuous-v2')
 obs = env.reset()
-ddp = DDP(lambda x, u: env._state_eq(x, u),  # x(i+1) = f(x(i), u)
-          lambda x, u: 0.5 * np.sum(np.square(u)),  # l(x, u)
-          lambda x: 0.5 * (np.square(1.0 - np.cos(x[2])) + np.square(x[1]) + np.square(x[3])),  # lf(x)
-          env.max_force,
+
+# ddp = DDP(lambda x, u: env._state_eq(x, u),  # x(i+1) = f(x(i), u)
+#           lambda x, u: 0.5 * np.sum(np.square(u)),  # l(x, u)
+#           lambda x: 0.5 * (np.square(x[0])),  # lf(x)
+#           env.action_space.high,
+#           env.observation_space.shape[0])
+
+ddp = DDP(lambda x, u: env.state_step(x, u),  # x(i+1) = f(x(i), u)
+          lambda x, u: 0.5 * np.sum([np.square(u), x[0]*x[0], x[1]*x[1], x[2]*x[2], x[3]*x[3], x[4]*x[4]]),  # l(x, u)
+          lambda x: 0.5 * np.sum([x[0]*x[0], x[1]*x[1], x[2]*x[2], x[3]*x[3], x[4]*x[4]]),  # lf(x)
+          env.action_space.high,
           env.observation_space.shape[0])
-u_seq = [np.zeros(1) for _ in range(ddp.pred_time)]
+
+u_seq = [np.zeros(2) for _ in range(ddp.pred_time)]
 x_seq = [obs.copy()]
 for t in range(ddp.pred_time):
-    x_seq.append(env._state_eq(x_seq[-1], u_seq[t]))
+    x_seq.append(env.state_step(x_seq[-1], u_seq[t]))
 
 cnt = 0
 while True:
@@ -88,7 +100,7 @@ while True:
         k_seq, kk_seq = ddp.backward(x_seq, u_seq)
         x_seq, u_seq = ddp.forward(x_seq, u_seq, k_seq, kk_seq)
 
-    print(u_seq.T)
+    #print(u_seq.T)
     obs, _, _, _ = env.step(u_seq[0])
     x_seq[0] = obs.copy()
     cnt += 1
